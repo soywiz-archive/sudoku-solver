@@ -22,10 +22,10 @@ class SudokuSolverTest {
         val solver = SudokuSolver(board)
         solver.solveInit()
         for (n in 0 until 10) {
-            val updateCount = solver.updateStep()
-            if (updateCount == 0) break
-            println("updateCount=$updateCount")
             solver.printBoard()
+            val updateCount = solver.updateStep()
+            println("updateCount=$updateCount")
+            if (updateCount == 0) break
         }
 
         //println(solver.cells[19].seqs)
