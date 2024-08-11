@@ -1,6 +1,11 @@
 package com.soywiz
 
-class SudokuSolver(val board: SudokuBoard) {
+import kotlin.random.*
+
+class SudokuSolver(
+    val board: SudokuBoard,
+    val random: Random = Random,
+) {
     val cells = List(81) { SudokuCell(this, it) }
     val seqs = SudokuIndices.all.map { SudokuSequence(this, it) }
     val squares = seqs.filter { it.indices.kind == SudokuIndices.Kind.SQUARE }
@@ -20,23 +25,30 @@ class SudokuSolver(val board: SudokuBoard) {
 
     fun clone() = SudokuSolver(board.clone()).also { it.copyFrom(this) }
 
-    fun solve(doInit: Boolean = true) {
+    fun solve(doInit: Boolean = true): List<Operation> {
         if (doInit) solveInit()
+        val ops = arrayListOf<Operation>()
         while (true) {
             printBoard()
-            val updateCount = updateStep()
-            println("updateCount=$updateCount")
-            if (updateCount == 0) {
-                if (isComplete()) {
-                    break
-                } else {
-                    for (cell in findEmptyCellsSortedByMissingCount()) {
-                        println("- $cell")
-                    }
-                    TODO()
+            val operation = updateStep()
+
+            println("operation=$operation")
+            if (operation != null) ops += operation
+
+            if (isComplete()) {
+                printBoard()
+                break
+            }
+
+            println("operation=$operation")
+            if (operation == null) {
+                for (cell in findEmptyCellsSortedByMissingCount()) {
+                    println("- $cell")
                 }
+                TODO()
             }
         }
+        return ops
     }
 
     fun solveInit() {
@@ -52,38 +64,51 @@ class SudokuSolver(val board: SudokuBoard) {
     var step2Count = 0
     var step3Count = 0
 
-    fun updateStep(): Int {
-        if (board.isComplete()) return 0
-        updateStep0().takeIf { it != 0 }?.let { step1Count++; return it }
-        if (board.isComplete()) return 0
-        updateStep1().takeIf { it != 0 }?.let { step2Count++; return it }
-        if (board.isComplete()) return 0
-        updateStep2().takeIf { it != 0 }?.let { step3Count++; return it }
-        if (board.isComplete()) return 0
+    val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
+
+    fun updateStep(): Operation? {
+        for (algo in algos) {
+            if (board.isComplete()) return null
+            algo.invoke()?.let { return it }
+        }
         TODO()
     }
 
-    // Back-tracking
-    fun updateStep2(): Int {
-        val origin = this.clone()
-        val cellToTry = findEmptyCellsSortedByMissingCount().first()
+    var backTrackingLevel = 0
 
-        for (v in cellToTry.missing.values()) {
+    // Back-tracking
+    fun updateStep2(): Operation {
+        val origin = this.clone()
+        val cellsToTry = findEmptyCellsSortedByMissingCount()
+        val cellsToTryCut = cellsToTry.filter { it.missing.count == cellsToTry.first().missing.count }
+
+        val cellToTry = cellsToTryCut.random(random)
+        //println("${Indentations[backTrackingLevel]}BACKTRACKING: $cellToTry")
+
+        for (v in cellToTry.missing.values().sortedBy { random.nextInt() }) {
+            //println("${Indentations[backTrackingLevel]} -- try=$v")
+
             try {
                 cellToTry.value = v
-                solve(doInit = false)
-                if (isComplete()) break
-                TODO()
+                backTrackingLevel++
+                Thread.yield()
+                val ops = solve(doInit = false)
+                if (isComplete()) {
+                    return Operation.BACKTRACKING(ops)
+                }
             } catch (e: IllegalStateException) {
+                //println("${Indentations[backTrackingLevel]} -- -- error=${e.message}")
                 this.copyFrom(origin)
+            } finally {
+                backTrackingLevel--
             }
         }
-
-        return 1
+        //println("${Indentations[backTrackingLevel]}/BACKTRACKING: $cellToTry")
+        throw IllegalStateException("No solution here")
     }
 
     // Same sequences
-    fun updateStep0(): Int {
+    fun updateStep0(): Operation? {
         var count = 0
         val singleCells = findSingleCells()
         for (cell in singleCells) {
@@ -96,11 +121,11 @@ class SudokuSolver(val board: SudokuBoard) {
             }
             count++
         }
-        return count
+        return if (count == 0) null else Operation.SAME_SEQUENCES(count)
     }
 
     // Complementary sequences
-    fun updateStep1(): Int {
+    fun updateStep1(): Operation? {
         var count = 0
         //val sorted = findEmptyCellsSortedByMissingCount()
         //for (cell in sorted) {
@@ -129,7 +154,7 @@ class SudokuSolver(val board: SudokuBoard) {
                 //println("!!! cellMissing=$cellMissing -- set=$set -- intersection=${cellMissing intersection set} ::: $seq")
             }
         }
-        return count
+        return if (count == 0) null else Operation.COMPLEMENTARY_SEQUENCES(count)
     }
 
     fun printBoard() {
@@ -153,7 +178,8 @@ class SudokuSolver(val board: SudokuBoard) {
         for (x in 0 until 9) {
             it.append("  ")
             for (y in 0 until 9) {
-                it.append("${board.values[n]}, ")
+                it.append(board.values[n])
+                it.append(", ")
                 if (y == 2 || y == 5) it.append("/**/ ")
                 n++
             }
@@ -340,6 +366,12 @@ class SudokuIndices(val kind: Kind, val index: Int, val indices: List<Int>) {
     }
 }
 
+sealed class Operation {
+    data class SAME_SEQUENCES(val count: Int) : Operation()
+    data class COMPLEMENTARY_SEQUENCES(val count: Int) : Operation()
+    data class BACKTRACKING(val ops: List<Operation>) : Operation()
+}
+
 inline class SudokuBitMask(val bits: Int) {
     companion object {
         val INVALID = SudokuBitMask(-1)
@@ -373,5 +405,14 @@ inline class SudokuBitMask(val bits: Int) {
             //it.append("${this@SudokuBitMask.count()}:")
             for (n in 1..9) if (this@SudokuBitMask.has(n)) it.append("$n")
         }.toString()
+    }
+}
+
+object Indentations {
+    val values = arrayListOf<String>("")
+
+    operator fun get(index: Int): String {
+        while (index >= values.size) values += values.last() + "  "
+        return values[index]
     }
 }
