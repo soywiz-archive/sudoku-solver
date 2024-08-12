@@ -68,7 +68,8 @@ class SudokuSolver(
     //val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
     //val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
     //val algos = listOf(::updateStep0, ::updateStep1, ::updateXYWing)
-    val algos = listOf(::updateStep0, ::updateStep1, ::updateXYWing, ::updateBackTracking)
+    //val algos = listOf(::updateStep0, ::updateStep1, ::updateXYWing, ::updateBackTracking)
+    val algos = listOf(::updateStep1, ::updateStep0, ::updateXYWing, ::updateBackTracking)
     //val algos = listOf(::updateStep0, ::updateStep1, ::updateBackTracking)
     //val algos = listOf(::updateStep2)
 
@@ -152,7 +153,7 @@ class SudokuSolver(
                 cellToTry.value = v
                 backTrackingLevel++
                 Thread.yield()
-                println("--- STARTING BACKTRACKING ---")
+                println("--- STARTING BACKTRACKING --- $v :: $cellToTry")
                 val ops = solve(doInit = false)
                 if (isComplete()) {
                     return Operation.BACKTRACKING(ops)
