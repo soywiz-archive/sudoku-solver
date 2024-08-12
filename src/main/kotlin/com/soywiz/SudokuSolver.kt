@@ -4,7 +4,8 @@ import kotlin.random.*
 
 class SudokuSolver(
     val board: SudokuBoard,
-    val random: Random = Random,
+    //val random: Random = Random,
+    val random: Random = Random(0),
 ) {
     val cells = List(81) { SudokuCell(this, it) }
     val seqs = SudokuIndices.all.map { SudokuSequence(this, it) }
@@ -32,7 +33,7 @@ class SudokuSolver(
             printBoard()
             val operation = updateStep()
 
-            println("operation=$operation")
+            println("operation[${board.version}]=$operation")
             if (operation != null) ops += operation
 
             if (isComplete()) {
@@ -40,7 +41,6 @@ class SudokuSolver(
                 break
             }
 
-            println("operation=$operation")
             if (operation == null) {
                 for (cell in findEmptyCellsSortedByMissingCount()) {
                     println("- $cell")
@@ -56,20 +56,80 @@ class SudokuSolver(
         for (cell in cells) cell.update()
     }
 
-    fun findSingleCells(): List<SudokuCell> = cells.filter { it.missing.count == 1 && it.value == 0 }
     fun findEmptyCells() = cells.filter { it.isEmpty }
+    fun findSingleCells(): List<SudokuCell> = cells.filter { it.isEmpty && it.missing.count == 1 }
+    fun findTwoCandidateCells(): List<SudokuCell> = cells.filter { it.isEmpty && it.missing.count == 2 }
     fun findEmptyCellsSortedByMissingCount(): List<SudokuCell> = findEmptyCells().sortedBy { it.missing.count }
 
     var step1Count = 0
     var step2Count = 0
     var step3Count = 0
 
-    val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
+    //val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
+    //val algos = listOf(::updateStep0, ::updateStep1, ::updateStep2)
+    //val algos = listOf(::updateStep0, ::updateStep1, ::updateXYWing)
+    val algos = listOf(::updateStep0, ::updateStep1, ::updateXYWing, ::updateBackTracking)
+    //val algos = listOf(::updateStep0, ::updateStep1, ::updateBackTracking)
+    //val algos = listOf(::updateStep2)
+
+    /**
+     * <https://sudokusolver.app/xywing.html>
+     */
+    fun updateXYWing(): Operation? {
+        val wings = arrayListOf<XYWing>()
+
+        for (pivot in findTwoCandidateCells()) {
+            val pivotNumbers = pivot.missing.values()
+            val pivotRelatedCells = pivot.relatedCells
+            val candidates = pivotRelatedCells.filter { it.missing.count == 2 && (it.missing.intersection(pivot.missing).count == 1) }
+            //pivot=CELL(50[5, 5], missing[2]=59, included[7]=1234678):
+            // - CELL(46[1, 5], missing[2]=59, included[7]=1234678)
+            // - CELL(77[5, 8], missing[2]=58, included[7]=1234679)
+            // - CELL(39[3, 4], missing[2]=89, included[7]=1234567)
+            if (candidates.size >= 2) {
+                pincerLoop@for ((index, pincer1) in candidates.withIndex()) {
+                    for (pincer2 in candidates.drop(index + 1)) {
+                        val intersection = pincer1.missing.intersection(pincer2.missing)
+                        if (intersection.count == 1 && intersection.intersection(pivot.missing).count == 0) {
+                            //println("  - XY-WING: $pivot, $cand, $cand2")
+
+                            val intersectionOfVisibleToPincer1AndPincer2 = pincer1.relatedCells.toSet().intersect(pincer2.relatedCells.toSet())
+                            val stripNum = intersection.findFirstNum()
+
+                            //println("stripNum=$stripNum")
+                            var updateCount = 0
+                            for (cell in intersectionOfVisibleToPincer1AndPincer2) {
+                                //println("-------: $cell - stripNum=$stripNum")
+                                val nmissing = cell.missing.without(stripNum)
+                                if (cell.missing != nmissing) {
+                                    cell.missing = nmissing
+                                    updateCount++
+                                }
+                                //cell.included = cell.missing.inv()
+                            }
+
+                            if (updateCount > 0) {
+                                wings += XYWing(pivot.index, pincer1.index, pincer2.index, updateCount)
+                            }
+
+                            break@pincerLoop
+                        }
+                    }
+                }
+            }
+        }
+        return if (wings.isEmpty()) null else Operation.XY_WING(wings)
+    }
 
     fun updateStep(): Operation? {
         for (algo in algos) {
             if (board.isComplete()) return null
             algo.invoke()?.let { return it }
+        }
+        for (square in squares) {
+            for (cell in square.findEmptyCells()) {
+                println(cell)
+            }
         }
         TODO()
     }
@@ -77,7 +137,7 @@ class SudokuSolver(
     var backTrackingLevel = 0
 
     // Back-tracking
-    fun updateStep2(): Operation {
+    fun updateBackTracking(): Operation {
         val origin = this.clone()
         val cellsToTry = findEmptyCellsSortedByMissingCount()
         val cellsToTryCut = cellsToTry.filter { it.missing.count == cellsToTry.first().missing.count }
@@ -92,11 +152,12 @@ class SudokuSolver(
                 cellToTry.value = v
                 backTrackingLevel++
                 Thread.yield()
+                println("--- STARTING BACKTRACKING ---")
                 val ops = solve(doInit = false)
                 if (isComplete()) {
                     return Operation.BACKTRACKING(ops)
                 }
-            } catch (e: IllegalStateException) {
+            } catch (e: IllegalBoardException) {
                 //println("${Indentations[backTrackingLevel]} -- -- error=${e.message}")
                 this.copyFrom(origin)
             } finally {
@@ -104,7 +165,12 @@ class SudokuSolver(
             }
         }
         //println("${Indentations[backTrackingLevel]}/BACKTRACKING: $cellToTry")
-        throw IllegalStateException("No solution here")
+        throw IllegalBoardException()
+    }
+
+    fun updateStepHiddenSingle(): Operation? {
+        //Operation.HIDDEN_SINGLE
+        TODO()
     }
 
     // Same sequences
@@ -178,7 +244,7 @@ class SudokuSolver(
         for (x in 0 until 9) {
             it.append("  ")
             for (y in 0 until 9) {
-                it.append(board.values[n])
+                it.append(board[n])
                 it.append(", ")
                 if (y == 2 || y == 5) it.append("/**/ ")
                 n++
@@ -201,8 +267,8 @@ class SudokuCell(val solver: SudokuSolver, val index: Int) {
     //val nrow1 = nrow + 1
 
     private var _value: Int
-        get() = board.values[index]
-        set(value) { board.values[index] = value }
+        get() = board[index]
+        set(value) { board[index] = value }
 
     var value: Int
         get() = _value
@@ -214,13 +280,15 @@ class SudokuCell(val solver: SudokuSolver, val index: Int) {
     val isEmpty get() = value == 0
 
     val seqs = arrayListOf<SudokuSeqCell>()
+    val relatedCells by lazy {
+        seqs.flatMap { it.seq.cells }.map { it.cell }.distinct().filter { it != this }
+    }
     var missing = SudokuBitMask(0)
-    var included = SudokuBitMask(0)
+    val included get() = missing.inv()
 
     fun copyFrom(other: SudokuCell) {
         this._value = other._value
         this.missing = other.missing
-        this.included = other.included
         for (nseq in seqs.indices) {
             this.seqs[nseq].copyFrom(other.seqs[nseq])
         }
@@ -232,10 +300,10 @@ class SudokuCell(val solver: SudokuSolver, val index: Int) {
 
     fun update() {
         //missing = SudokuBitMask.ALL
-        included = SudokuBitMask.NONE
+        var included = SudokuBitMask.NONE
         for (seq in seqs) {
             //missing = missing.intersection(seq.missing)
-            included = included.with(seq.included)
+            included = included.with(seq.includedPartial)
         }
         missing = included.inv()
         //println("missing[$index]=$missing")
@@ -249,8 +317,8 @@ class SudokuCell(val solver: SudokuSolver, val index: Int) {
 }
 
 class SudokuSeqCell(val cell: SudokuCell, val seq: SudokuSequence, val seqIndex: Int) {
-    var missing = SudokuBitMask(0)
-    var included = SudokuBitMask(0)
+    var missingPartial = SudokuBitMask(0)
+    val includedPartial get() = missingPartial.inv()
 
     var value: Int
         get() = cell.value
@@ -263,8 +331,7 @@ class SudokuSeqCell(val cell: SudokuCell, val seq: SudokuSequence, val seqIndex:
     fun findEmptyCells() = seq.findEmptyCells()
 
     fun copyFrom(other: SudokuSeqCell) {
-        this.missing = other.missing
-        this.included = other.included
+        this.missingPartial = other.missingPartial
     }
 
     fun updated() {
@@ -275,21 +342,30 @@ class SudokuSeqCell(val cell: SudokuCell, val seq: SudokuSequence, val seqIndex:
         seq.validate()
     }
 
-    override fun toString(): String = "SudokuSeqCell[${seq.name}](${cell.index}, M=$missing, I=$included)"
+    override fun toString(): String = "SudokuSeqCell[${seq.name}](${cell.index}, M=${cell.missing}, I=${cell.included})"
 }
 
-inline class SudokuBoard(val values: IntArray) {
+class SudokuBoard(val _values: IntArray) {
     constructor(vararg values: Int, unit: Unit = Unit) : this(values)
 
+    var version = 0
+
+    operator fun get(index: Int): Int = _values[index]
+    operator fun set(index: Int, value: Int) {
+        if (_values[index] == value) return
+        _values[index] = value
+        version++
+    }
+
     fun isComplete(): Boolean {
-        return values.all { it != 0 }
+        return _values.all { it != 0 }
     }
 
     init {
-        check(values.size == 81)
+        if (_values.size != 81) throw IllegalBoardException()
     }
 
-    fun clone() = SudokuBoard(values.copyOf())
+    fun clone() = SudokuBoard(_values.copyOf())
 }
 
 class SudokuSequence(val solver: SudokuSolver, val indices: SudokuIndices) {
@@ -305,13 +381,13 @@ class SudokuSequence(val solver: SudokuSolver, val indices: SudokuIndices) {
 
     override fun toString(): String = "SudokuSequence($cells)"
 
-    operator fun get(n: Int) = board.values[indices[n]]
+    operator fun get(n: Int) = board[indices[n]]
     fun getMask(): SudokuBitMask {
         var includedMask = SudokuBitMask(0)
         for (n in 0 until 9) {
             val v = this[n]
             if (v == 0) continue
-            check(!includedMask.has(v))
+            if (includedMask.has(v)) throw IllegalBoardException()
             includedMask = includedMask.with(v)
         }
         //println("includedMask=$includedMask")
@@ -325,8 +401,7 @@ class SudokuSequence(val solver: SudokuSolver, val indices: SudokuIndices) {
         for (n in 0 until 9) {
             val v = this[n]
             if (v == 0) {
-                this.cells[n].missing = missingMask
-                this.cells[n].included = includedMask
+                this.cells[n].missingPartial = missingMask
                 this.cells[n].updated()
             }
         }
@@ -369,8 +444,12 @@ class SudokuIndices(val kind: Kind, val index: Int, val indices: List<Int>) {
 sealed class Operation {
     data class SAME_SEQUENCES(val count: Int) : Operation()
     data class COMPLEMENTARY_SEQUENCES(val count: Int) : Operation()
+    data class HIDDEN_SINGLE(val count: Int) : Operation()
     data class BACKTRACKING(val ops: List<Operation>) : Operation()
+    data class XY_WING(val items: List<XYWing>) : Operation()
 }
+
+data class XYWing(val pivot: Int, val pincer1: Int, val pincer2: Int, val stripCount: Int)
 
 inline class SudokuBitMask(val bits: Int) {
     companion object {
@@ -380,7 +459,7 @@ inline class SudokuBitMask(val bits: Int) {
     }
 
     fun mask(value: Int): Int {
-        check(value in 1..9)
+        if (value !in 1..9) throw IllegalBoardException()
         return 1 shl (value - 1)
     }
 
@@ -416,3 +495,5 @@ object Indentations {
         return values[index]
     }
 }
+
+class IllegalBoardException : IllegalStateException()
